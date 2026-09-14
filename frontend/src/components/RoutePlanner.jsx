@@ -340,7 +340,7 @@ export default function RoutePlanner({
   const currentWeights = getTimeWeights();
 
   return (
-    <div className="flex flex-col gap-3.5 max-h-[720px] overflow-y-auto no-scrollbar pr-0.5">
+    <div className="flex flex-col gap-3.5 pb-2">
       
       {/* Route Query & Search Card */}
       <div className="glass-panel p-4 rounded-2xl border border-slate-800 space-y-3 shadow-xl">

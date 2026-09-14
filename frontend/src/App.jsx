@@ -363,11 +363,11 @@ function SafeRouteMain() {
         </div>
       )}
 
-      {/* Main Container Layout (Requirement 1: 65-70% map, 30-35% route panel on desktop) */}
-      <main className="flex-1 max-w-[1600px] w-full mx-auto p-3 sm:p-4 lg:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 items-start">
+      {/* Main Container Layout: Pinned Sticky Map on Left (68%), Independently Scrollable Panel on Right (32%) */}
+      <main className="flex-1 max-w-[1600px] w-full mx-auto p-3 sm:p-4 lg:px-6 lg:py-3 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 items-start">
         
-        {/* Left Side: Interactive Map Visual Centerpiece (68% desktop width: lg:col-span-8) */}
-        <section className="lg:col-span-8 flex flex-col gap-3 h-full">
+        {/* Left Side: Stationary Interactive Map Centerpiece (lg:col-span-8) */}
+        <section className="lg:col-span-8 lg:sticky lg:top-20 flex flex-col gap-3 z-10">
           
           {/* Active Guardian Walk HUD */}
           {isGuardianWalking && (
@@ -431,8 +431,8 @@ function SafeRouteMain() {
 
         </section>
 
-        {/* Right Side: Tab Panel Content (32% desktop width: lg:col-span-4) */}
-        <section className="lg:col-span-4 h-full">
+        {/* Right Side: Scrollable Tab Panel Content (lg:col-span-4) */}
+        <section className="lg:col-span-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:overflow-x-hidden pr-1 pb-4">
           {activeTab === 'routes' && (
             <RoutePlanner
               origin={origin}
