@@ -513,7 +513,34 @@ to communicate with the deployed backend.
 
 # 🖼️ Screenshots
 
-> Add screenshots of the main application screens here.
+## 🖼️ Application Screenshots
+
+### 🏠 Home Dashboard
+![SafeRoute Home](./screenshots/home.png)
+
+### 🗺️ Safety Map
+![Safety Map](./screenshots/map-mode.png)
+
+### 🛣️ Safe Route & Guardian Walk
+![Safe Route Guardian](./screenshots/safe-route-guradian.png)
+
+### 🛡️ Safe Havens
+![Safe Havens](./screenshots/Safe-Havens-dict.png)
+
+### ⚠️ Community Incidents
+![Community Incidents](./screenshots/community-incidents.png)
+
+### 🚨 Report Hazard
+![Report Hazard](./screenshots/report-hazard.png)
+
+### 📊 City Safety Radar
+![City Safety Radar](./screenshots/city-safety-radar.png)
+
+### 🧭 Navigation Bar
+![Navigation Bar](./screenshots/navigation-bar.png)
+
+### 🆘 Emergency SOS
+![Emergency SOS](./screenshots/sos.png)
 
 Recommended screenshots:
 
