@@ -33,20 +33,76 @@ import {
 } from 'lucide-react';
 import { SafeRouteAPI } from '../services/api';
 
-// Custom Map Controller to center on selected route or point or flyTarget
-function MapController({ center, zoom, bounds, flyTarget }) {
+// Custom Map Controller to center on selected route, step, or point without overriding user manual zoom
+function MapController({ center, zoom = 14, bounds, flyTarget, activeStepTarget, overviewTrigger }) {
   const map = useMap();
+  const prevBoundsRef = useRef(null);
+  const prevFlyRef = useRef(null);
+  const prevCenterRef = useRef(null);
+  const prevStepRef = useRef(null);
+  const prevOverviewRef = useRef(null);
+
+  // 1. Fit bounds when Overview button is clicked
+  useEffect(() => {
+    if (overviewTrigger && bounds && bounds.length > 0) {
+      if (prevOverviewRef.current !== overviewTrigger) {
+        prevOverviewRef.current = overviewTrigger;
+        try {
+          map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+        } catch (_) {}
+      }
+    }
+  }, [overviewTrigger, bounds, map]);
+
+  // 2. Fly to active step target (Aage / Piche street inspection)
+  useEffect(() => {
+    if (activeStepTarget && activeStepTarget.lat != null && activeStepTarget.lng != null) {
+      const stepKey = `${Number(activeStepTarget.lat).toFixed(5)},${Number(activeStepTarget.lng).toFixed(5)},${activeStepTarget.ts || ''},${activeStepTarget.zoom || ''}`;
+      if (prevStepRef.current !== stepKey) {
+        prevStepRef.current = stepKey;
+        map.flyTo([activeStepTarget.lat, activeStepTarget.lng], activeStepTarget.zoom || 18.5, {
+          duration: 1.0,
+          easeLinearity: 0.25
+        });
+      }
+    }
+  }, [activeStepTarget, map]);
+
+  // 3. Fly to specific target (when user clicks GPS, searches a place, etc.)
   useEffect(() => {
     if (flyTarget && flyTarget.lat != null && flyTarget.lng != null) {
-      map.flyTo([flyTarget.lat, flyTarget.lng], flyTarget.zoom || 16, { duration: 1.2 });
-    } else if (bounds && bounds.length > 0) {
-      try {
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
-      } catch (_) {}
-    } else if (center && center[0] != null && center[1] != null) {
-      map.flyTo(center, zoom || 14, { duration: 1.0 });
+      const flyKey = `${Number(flyTarget.lat).toFixed(4)},${Number(flyTarget.lng).toFixed(4)},${flyTarget.ts || ''},${flyTarget.zoom || ''}`;
+      if (prevFlyRef.current !== flyKey) {
+        prevFlyRef.current = flyKey;
+        map.flyTo([flyTarget.lat, flyTarget.lng], flyTarget.zoom || 16, { duration: 1.2 });
+      }
     }
-  }, [center, zoom, bounds, flyTarget, map]);
+  }, [flyTarget, map]);
+
+  // 4. Fit bounds ONLY when route bounds actually change (new route calculated)
+  useEffect(() => {
+    if (bounds && bounds.length > 0) {
+      const boundsKey = JSON.stringify(bounds);
+      if (prevBoundsRef.current !== boundsKey) {
+        prevBoundsRef.current = boundsKey;
+        try {
+          map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+        } catch (_) {}
+      }
+    }
+  }, [bounds, map]);
+
+  // 5. Initial center ONLY when origin coordinates actually change and no active route
+  useEffect(() => {
+    if (center && center[0] != null && center[1] != null && (!bounds || bounds.length === 0)) {
+      const centerKey = `${Number(center[0]).toFixed(4)},${Number(center[1]).toFixed(4)}`;
+      if (prevCenterRef.current !== centerKey) {
+        prevCenterRef.current = centerKey;
+        map.flyTo(center, zoom || 15, { duration: 1.0 });
+      }
+    }
+  }, [center, zoom, bounds, map]);
+
   return null;
 }
 
@@ -78,6 +134,8 @@ export default function SafetyMap({
   incidents = [],
   routes = [],
   selectedRouteIndex = 0,
+  selectedStepIndex = 0,
+  onSelectStep,
   origin,
   destination,
   guardianLocation,
@@ -90,7 +148,8 @@ export default function SafetyMap({
   onSavePlace,
   liveSafetyStats,
   mapTheme = 'dark',
-  setMapTheme
+  setMapTheme,
+  flyTarget: externalFlyTarget
 }) {
   const [localTileLayer, setLocalTileLayer] = useState('dark');
   const activeTileLayer = mapTheme || localTileLayer || 'dark';
@@ -115,6 +174,8 @@ export default function SafetyMap({
   const [flyTarget, setFlyTarget] = useState(null);
   const [isLocatingGPS, setIsLocatingGPS] = useState(false);
   const searchTimeoutRef = useRef(null);
+
+  const activeFlyTarget = externalFlyTarget || flyTarget;
 
   // 100% Google Maps high-detail tiles with every local place, shop, building & street (Zoom up to level 22)
   const tileLayers = {
@@ -243,12 +304,154 @@ export default function SafetyMap({
     </div>
   `, 'hazard-med-pin', [22, 22]), []);
 
+  // Active Route & Steps
+  const activeRoute = routes[selectedRouteIndex] || routes[0];
+  const rawSteps = activeRoute?.steps || [];
+  const routeCoords = activeRoute?.coordinates || [];
+
+  // Ensure enriched steps with coordinates for every single street segment
+  const enrichedSteps = useMemo(() => {
+    if (!activeRoute) return [];
+    if (rawSteps && rawSteps.length > 0) {
+      return rawSteps.map((step, sIdx) => {
+        let lat = step.lat;
+        let lng = step.lng;
+        if (lat == null || lng == null) {
+          if (routeCoords.length > 0) {
+            const fraction = rawSteps.length > 1 ? sIdx / (rawSteps.length - 1) : 0;
+            const coordIdx = Math.min(routeCoords.length - 1, Math.floor(fraction * (routeCoords.length - 1)));
+            lng = Number(routeCoords[coordIdx][0]);
+            lat = Number(routeCoords[coordIdx][1]);
+          }
+        }
+        return {
+          ...step,
+          lat: Number(lat),
+          lng: Number(lng),
+          index: sIdx
+        };
+      });
+    }
+    // Synthesize intermediate street checkpoints if no sub-steps returned
+    if (routeCoords.length > 0) {
+      const pointsCount = Math.min(6, Math.max(3, Math.floor(routeCoords.length / 5)));
+      const synthetic = [];
+      for (let i = 0; i < pointsCount; i++) {
+        const fraction = i / (pointsCount - 1);
+        const coordIdx = Math.min(routeCoords.length - 1, Math.floor(fraction * (routeCoords.length - 1)));
+        const pt = routeCoords[coordIdx];
+        synthetic.push({
+          instruction: i === 0
+            ? `Depart from ${origin?.name || 'Start Point'}`
+            : i === pointsCount - 1
+            ? `Arrive safely at ${destination?.name || 'Destination'}`
+            : `Follow safe illuminated corridor (Segment ${i + 1})`,
+          distanceMeters: Math.round(((activeRoute.distanceKm || 2) * 1000) / pointsCount),
+          lat: Number(pt[1]),
+          lng: Number(pt[0]),
+          index: i,
+          stepBonus: i % 2 === 0 ? '💡 High-lumen LED lighting zone' : '📹 CCTV monitored area'
+        });
+      }
+      return synthetic;
+    }
+    return [];
+  }, [activeRoute, rawSteps, routeCoords, origin?.name, destination?.name]);
+
+  // Step Navigation State
+  const [currentStepIdx, setCurrentStepIdx] = useState(0);
+  const [zoomMode, setZoomMode] = useState(18.5); // 18.5 (Street View) or 15.5 (Corridor)
+  const [stepTarget, setStepTarget] = useState(null);
+  const [overviewTrigger, setOverviewTrigger] = useState(null);
+
+  const activeStepIndexValue = selectedStepIndex !== undefined ? selectedStepIndex : currentStepIdx;
+
+  const handleSelectStep = (idx, customZoom = null) => {
+    if (idx < 0 || idx >= enrichedSteps.length) return;
+    const targetStep = enrichedSteps[idx];
+    if (!targetStep) return;
+
+    if (onSelectStep) onSelectStep(idx);
+    setCurrentStepIdx(idx);
+
+    const zoomToUse = customZoom || zoomMode || 18.5;
+    setStepTarget({
+      lat: targetStep.lat,
+      lng: targetStep.lng,
+      zoom: zoomToUse,
+      ts: Date.now()
+    });
+  };
+
+  const handleNextStep = () => {
+    if (activeStepIndexValue < enrichedSteps.length - 1) {
+      handleSelectStep(activeStepIndexValue + 1);
+    }
+  };
+
+  const handlePrevStep = () => {
+    if (activeStepIndexValue > 0) {
+      handleSelectStep(activeStepIndexValue - 1);
+    }
+  };
+
+  const handleOverviewClick = () => {
+    setOverviewTrigger(Date.now());
+  };
+
+  const toggleZoomMode = () => {
+    const nextZoom = zoomMode >= 18 ? 15.5 : 18.5;
+    setZoomMode(nextZoom);
+    if (enrichedSteps.length > 0) {
+      handleSelectStep(activeStepIndexValue, nextZoom);
+    }
+  };
+
+  // Keyboard Arrow Navigation (Left = Piche, Right = Aage, O = Overview)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (enrichedSteps.length === 0) return;
+
+      if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        handleNextStep();
+      } else if (e.key === 'ArrowLeft' || e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        handlePrevStep();
+      } else if (e.key === 'o' || e.key === 'O') {
+        e.preventDefault();
+        handleOverviewClick();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeStepIndexValue, enrichedSteps.length]);
+
+  // Step Waypoint DivIcons
+  const activeStepIcon = useMemo(() => createDivIcon(`
+    <div style="position:relative; width:44px; height:44px; display:flex; align-items:center; justify-content:center;">
+      <span style="position:absolute; width:44px; height:44px; border-radius:50%; background:rgba(16,185,129,0.45); animation:mapPulse 1.2s infinite;"></span>
+      <div style="background:#10B981; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2.5px solid #ffffff; box-shadow:0 0 20px rgba(16,185,129,1); color:#07090E; font-weight:900; font-size:14px;">
+        📍
+      </div>
+    </div>
+  `, 'active-step-beacon', [44, 44]), []);
+
+  const createStepWaypointIcon = (stepNum, isCurrent) => {
+    return createDivIcon(`
+      <div style="background:${isCurrent ? '#10B981' : '#0F172A'}; color:${isCurrent ? '#07090E' : '#94A3B8'}; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid ${isCurrent ? '#ffffff' : '#334155'}; font-weight:800; font-size:10px; box-shadow:0 4px 12px rgba(0,0,0,0.6);">
+        ${stepNum}
+      </div>
+    `, 'step-waypoint-pin', [24, 24]);
+  };
+
   // Compute bounding box when routes change
   const routeBounds = useMemo(() => {
     if (!routes || routes.length === 0) return null;
-    const activeRoute = routes[selectedRouteIndex] || routes[0];
-    if (!activeRoute || !activeRoute.coordinates || activeRoute.coordinates.length === 0) return null;
-    return activeRoute.coordinates.map(c => [c[1], c[0]]);
+    const currentActiveRoute = routes[selectedRouteIndex] || routes[0];
+    if (!currentActiveRoute || !currentActiveRoute.coordinates || currentActiveRoute.coordinates.length === 0) return null;
+    return currentActiveRoute.coordinates.map(c => [c[1], c[0]]);
   }, [routes, selectedRouteIndex]);
 
   // Handle Search Input in Floating Bar
@@ -293,77 +496,64 @@ export default function SafetyMap({
     }
   };
 
-  const handleLocateMe = () => {
-    if (!navigator.geolocation) {
-      alert('Geolocation is not supported by your browser.');
-      return;
-    }
-
+  const handleLocateMe = async () => {
     setIsLocatingGPS(true);
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const accuracy = Math.round(pos.coords.accuracy);
+    try {
+      const pos = await SafeRouteAPI.getCurrentLivePosition({ timeout: 6000 });
+      const lat = pos.lat;
+      const lng = pos.lng;
+      const accuracy = pos.accuracy;
 
-        // Instantly center map and update flyTarget
-        setFlyTarget({ lat, lng, zoom: 16, ts: Date.now() });
+      // Instantly center map and update flyTarget
+      setFlyTarget({ lat, lng, zoom: 16, ts: Date.now() });
 
-        const livePlace = {
-          name: 'My Current Location',
-          lat,
-          lng,
-          category: 'place',
-          subAddress: `Live GPS Position (±${accuracy}m)`
-        };
-        handleSelectPlace(livePlace);
-        if (onSelectOrigin) {
-          onSelectOrigin(livePlace);
-        }
+      const livePlace = {
+        name: pos.city ? `Current Location (${pos.city})` : 'My Current Location',
+        lat,
+        lng,
+        category: 'place',
+        subAddress: `Live Position (±${accuracy}m)`
+      };
+      handleSelectPlace(livePlace);
+      if (onSelectOrigin) {
+        onSelectOrigin(livePlace);
+      }
 
-        setIsLocatingGPS(false);
+      setIsLocatingGPS(false);
 
-        // Resolve friendly locality name in background
-        try {
-          const friendlyName = await SafeRouteAPI.reverseGeocode(lat, lng);
-          if (friendlyName && friendlyName !== 'Current Location') {
-            const updatedPlace = {
-              ...livePlace,
-              name: friendlyName,
-              subAddress: `Live GPS (${friendlyName})`
-            };
-            setSearchResultPlace(updatedPlace);
-            setSearchQuery(friendlyName);
-            if (onSelectOrigin) {
-              onSelectOrigin(updatedPlace);
-            }
+      // Resolve friendly locality name in background
+      try {
+        const friendlyName = await SafeRouteAPI.reverseGeocode(lat, lng);
+        if (friendlyName && friendlyName !== 'Current Location') {
+          const updatedPlace = {
+            ...livePlace,
+            name: friendlyName,
+            subAddress: `Live GPS (${friendlyName})`
+          };
+          setSearchResultPlace(updatedPlace);
+          setSearchQuery(friendlyName);
+          if (onSelectOrigin) {
+            onSelectOrigin(updatedPlace);
           }
-        } catch (_) {}
-      },
-      (err) => {
-        setIsLocatingGPS(false);
-        if (err.code === 1) {
-          alert('Location permission was denied. Please allow location access in your browser settings.');
-        } else {
-          alert('Unable to acquire current GPS location. Please check your connection and try again.');
         }
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+      } catch (_) {}
+    } catch (err) {
+      setIsLocatingGPS(false);
+      alert('Unable to acquire live location. Please allow browser location access.');
+    }
   };
 
   // Compute live safety metrics for bottom status ticker
-  const activeRoute = routes[selectedRouteIndex] || routes[0];
   const activeLighting = activeRoute?.factors?.lightingCoveragePct || 94;
   const activeCctv = activeRoute?.factors?.cctvCount || safetyPoints.filter(p => p.type === 'cctv_camera').length || 4;
   const activeHazards = activeRoute?.nearbyHazardsCount !== undefined ? activeRoute.nearbyHazardsCount : (incidents.filter(i => i.status !== 'resolved').length || 1);
 
   return (
-    <div className="relative w-full h-[600px] lg:h-[calc(100vh-6.5rem)] min-h-[500px] rounded-2xl overflow-hidden glass-panel border border-slate-800 shadow-2xl">
+    <div className="relative w-full h-[460px] sm:h-[540px] lg:h-[calc(100vh-6.5rem)] min-h-[420px] rounded-2xl overflow-hidden glass-panel border border-slate-800 shadow-2xl max-w-full">
       
-      {/* Floating Map Search Overlay */}
-      <div className="absolute top-3.5 left-3.5 z-30 max-w-sm sm:max-w-md w-[calc(100%-2rem)] sm:w-96 pointer-events-auto">
+      {/* Floating Map Search Overlay (Mobile-Optimized) */}
+      <div className="absolute top-2.5 left-2.5 right-2.5 sm:top-3.5 sm:left-3.5 sm:right-auto z-30 max-w-sm sm:max-w-md w-auto sm:w-96 pointer-events-auto">
         <div className="relative">
           <div className="flex items-center gap-2 bg-slate-950/95 backdrop-blur-2xl px-3 py-2 rounded-xl border border-slate-700/90 focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500/30 shadow-[0_12px_40px_rgba(0,0,0,0.7)] transition-all">
             <Search className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -477,13 +667,13 @@ export default function SafetyMap({
         </div>
       </div>
 
-      {/* Top Right Floating Controls: Layer Filters Only */}
-      <div className="absolute top-3.5 right-3.5 z-20 flex flex-col items-end gap-1.5 pointer-events-none">
-        {/* Layer Filters */}
-        <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-950/95 backdrop-blur-xl border border-slate-700/80 shadow-[0_10px_30px_rgba(0,0,0,0.65)] pointer-events-auto text-xs">
+      {/* Top Floating Controls: Layer Filters (Overflow-Protected) */}
+      <div className="absolute top-14 sm:top-3.5 right-2.5 sm:right-3.5 z-20 flex flex-col items-end gap-1.5 pointer-events-none max-w-[calc(100vw-1.5rem)]">
+        {/* Layer Filters Bar */}
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-950/95 backdrop-blur-xl border border-slate-700/80 shadow-[0_10px_30px_rgba(0,0,0,0.65)] pointer-events-auto text-xs overflow-x-auto no-scrollbar max-w-full">
           <button
             onClick={() => setShowLights(!showLights)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all shrink-0 ${
               showLights ? 'bg-amber-500/25 text-amber-300 border border-amber-500/40 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
             title="Toggle Street Lights"
@@ -494,7 +684,7 @@ export default function SafetyMap({
 
           <button
             onClick={() => setShowCctv(!showCctv)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all shrink-0 ${
               showCctv ? 'bg-sky-500/25 text-sky-300 border border-sky-500/40 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
             title="Toggle CCTV Cameras"
@@ -505,7 +695,7 @@ export default function SafetyMap({
 
           <button
             onClick={() => setShowPolice(!showPolice)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all shrink-0 ${
               showPolice ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/40 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
             title="Toggle Police Stations"
@@ -516,7 +706,7 @@ export default function SafetyMap({
 
           <button
             onClick={() => setShowSafeHavens(!showSafeHavens)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all shrink-0 ${
               showSafeHavens ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
             title="Toggle 24/7 Safe Havens"
@@ -527,7 +717,7 @@ export default function SafetyMap({
 
           <button
             onClick={() => setShowIncidents(!showIncidents)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all shrink-0 ${
               showIncidents ? 'bg-rose-500/25 text-rose-300 border border-rose-500/40 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
             title="Toggle Verified Hazards"
@@ -538,17 +728,123 @@ export default function SafetyMap({
         </div>
       </div>
 
-      {/* Live Safety Status Section (Requirement 8) */}
-      <div className="absolute bottom-3 left-3 right-3 sm:right-auto z-20 pointer-events-auto">
-        <div className="flex items-center gap-3 px-3.5 py-2 rounded-xl bg-slate-950/95 backdrop-blur-xl border border-slate-700/80 shadow-[0_10px_30px_rgba(0,0,0,0.75)] text-xs">
-          <div className="flex items-center gap-1.5">
+      {/* Floating Street Inspector & Navigation HUD (Aage / Piche & Full Route Overview) */}
+      {enrichedSteps.length > 0 && (
+        <div className="absolute bottom-14 sm:bottom-auto sm:top-14 sm:left-1/2 sm:-translate-x-1/2 left-2.5 right-2.5 sm:right-auto z-30 max-w-lg w-auto sm:w-[480px] pointer-events-auto">
+          <div className="bg-slate-950/98 backdrop-blur-2xl px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl border border-slate-700/90 shadow-[0_20px_50px_rgba(0,0,0,0.85)] space-y-2">
+            
+            {/* Top Header: Step Counter, Overview Button, Zoom Mode */}
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+                <span className="font-extrabold text-white uppercase tracking-wider text-[10px] sm:text-[11px] truncate">
+                  Street {activeStepIndexValue + 1} of {enrichedSteps.length}
+                </span>
+                <span className="text-[10px] text-slate-400 hidden xs:inline font-mono">
+                  ({Math.round(((activeStepIndexValue + 1) / enrichedSteps.length) * 100)}%)
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={toggleZoomMode}
+                  className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-[10px] font-bold transition-all"
+                  title="Toggle between Street close-up (18.5x) and Corridor view (15.5x)"
+                >
+                  {zoomMode >= 18 ? '🔍 Street (19x)' : '🗺️ Corridor (15x)'}
+                </button>
+                <button
+                  onClick={handleOverviewClick}
+                  className="px-2 py-0.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 hover:text-white border border-emerald-500/40 text-[10px] font-bold transition-all flex items-center gap-1 active:scale-95"
+                  title="Reset view to fit entire route on screen"
+                >
+                  <Compass className="w-3 h-3" />
+                  <span>🎯 Overview</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Main Street Instruction Card & Aage / Piche Stepper */}
+            <div className="flex items-center gap-2">
+              {/* ◀ Piche / Prev Street */}
+              <button
+                onClick={handlePrevStep}
+                disabled={activeStepIndexValue === 0}
+                className={`flex items-center gap-1 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-black transition-all shrink-0 active:scale-95 ${
+                  activeStepIndexValue === 0
+                    ? 'bg-slate-900/60 text-slate-600 border border-slate-800/80 cursor-not-allowed'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-100 hover:text-white border border-slate-600 shadow-sm'
+                }`}
+                title="Glide back to previous street (Shortcut: ← or P)"
+              >
+                <span className="text-sm">◀</span>
+                <span className="hidden sm:inline">Piche</span>
+              </button>
+
+              {/* Center Street Instruction */}
+              <div className="flex-1 min-w-0 bg-slate-900/90 px-3 py-1.5 rounded-xl border border-slate-800 text-center">
+                <div className="font-bold text-slate-100 text-[11px] sm:text-xs truncate">
+                  {enrichedSteps[activeStepIndexValue]?.instruction || 'Follow safe route corridor'}
+                </div>
+                <div className="flex items-center justify-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                  <span className="font-mono text-emerald-400 font-bold">
+                    {enrichedSteps[activeStepIndexValue]?.distanceMeters || 50}m
+                  </span>
+                  {enrichedSteps[activeStepIndexValue]?.stepBonus && (
+                    <span className="text-amber-400 truncate hidden xs:inline">
+                      {enrichedSteps[activeStepIndexValue].stepBonus}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Aage / Next Street ▶ */}
+              <button
+                onClick={handleNextStep}
+                disabled={activeStepIndexValue >= enrichedSteps.length - 1}
+                className={`flex items-center gap-1 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-black transition-all shrink-0 active:scale-95 ${
+                  activeStepIndexValue >= enrichedSteps.length - 1
+                    ? 'bg-slate-900/60 text-slate-600 border border-slate-800/80 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 shadow-neon-safe'
+                }`}
+                title="Glide forward to next street (Shortcut: → or N)"
+              >
+                <span className="hidden sm:inline">Aage</span>
+                <span className="text-sm">▶</span>
+              </button>
+            </div>
+
+            {/* Mini Clickable Step Dots Bar */}
+            <div className="flex items-center justify-center gap-1 pt-0.5 overflow-x-auto no-scrollbar py-0.5">
+              {enrichedSteps.map((s, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSelectStep(idx)}
+                  className={`h-1.5 rounded-full transition-all ${
+                    idx === activeStepIndexValue
+                      ? 'w-5 bg-emerald-400 shadow-[0_0_8px_#10B981]'
+                      : 'w-1.5 bg-slate-700 hover:bg-slate-500'
+                  }`}
+                  title={`Step ${idx + 1}: ${s.instruction}`}
+                />
+              ))}
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Live Safety Status Section (Responsive Bottom Ticker) */}
+      <div className="absolute bottom-2.5 left-2.5 right-2.5 sm:right-auto sm:bottom-3 sm:left-3 z-20 pointer-events-auto max-w-full">
+        <div className="flex items-center gap-2.5 sm:gap-3 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-950/95 backdrop-blur-xl border border-slate-700/80 shadow-[0_10px_30px_rgba(0,0,0,0.75)] text-xs overflow-x-auto no-scrollbar max-w-full">
+          <div className="flex items-center gap-1.5 shrink-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span className="font-bold text-slate-100 tracking-wider text-[11px] uppercase">Live Safety</span>
+            <span className="font-bold text-slate-100 tracking-wider text-[10px] sm:text-[11px] uppercase">Live Safety</span>
           </div>
 
-          <div className="h-3 w-px bg-slate-700 hidden sm:block"></div>
+          <div className="h-3 w-px bg-slate-700 hidden sm:block shrink-0"></div>
 
-          <div className="flex items-center gap-3 sm:gap-4 text-[11px]">
+          <div className="flex items-center gap-2.5 sm:gap-4 text-[10px] sm:text-[11px] shrink-0">
             <div className="flex items-center gap-1">
               <span className="text-slate-400">Lighting:</span>
               <span className="font-bold text-amber-400">{activeLighting}%</span>
@@ -569,9 +865,9 @@ export default function SafetyMap({
             </div>
           </div>
 
-          <div className="h-3 w-px bg-slate-700 hidden md:block"></div>
+          <div className="h-3 w-px bg-slate-700 hidden md:block shrink-0"></div>
 
-          <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
+          <span className="text-[10px] text-slate-400 font-mono hidden md:inline shrink-0">
             Updated just now
           </span>
         </div>
@@ -590,12 +886,29 @@ export default function SafetyMap({
             center={mapCenter}
             zoom={14}
             maxZoom={22}
+            minZoom={3}
             zoomControl={false}
             scrollWheelZoom={true}
-            className="w-full h-full"
+            dragging={true}
+            touchZoom={true}
+            doubleClickZoom={true}
+            boxZoom={true}
+            keyboard={true}
+            inertia={true}
+            inertiaDeceleration={3000}
+            easeLinearity={0.2}
+            worldCopyJump={true}
+            preferCanvas={true}
+            className="w-full h-full cursor-grab active:cursor-grabbing"
           >
             <ZoomControl position="bottomright" />
-            <MapController bounds={routeBounds} center={mapCenter} flyTarget={flyTarget} />
+            <MapController
+              bounds={routeBounds}
+              center={mapCenter}
+              flyTarget={activeFlyTarget}
+              activeStepTarget={stepTarget}
+              overviewTrigger={overviewTrigger}
+            />
             <MapClickHandler onMapClick={onMapClick} />
 
             <TileLayer
@@ -607,6 +920,42 @@ export default function SafetyMap({
               maxZoom={activeTileConfig.maxZoom || 22}
               className={activeTileConfig.tileClass || ''}
             />
+
+            {/* Render Numbered Step Waypoint Pins Along Active Route */}
+            {enrichedSteps.map((st, sIdx) => {
+              if (st.lat == null || st.lng == null) return null;
+              const isSelectedStep = sIdx === activeStepIndexValue;
+
+              return (
+                <Marker
+                  key={`step-pin-${sIdx}`}
+                  position={[st.lat, st.lng]}
+                  icon={isSelectedStep ? activeStepIcon : createStepWaypointIcon(sIdx + 1, false)}
+                  eventHandlers={{
+                    click: () => handleSelectStep(sIdx)
+                  }}
+                >
+                  <Popup autoPan={true}>
+                    <div className="p-1 text-xs max-w-[220px] space-y-1">
+                      <div className="font-extrabold text-emerald-400 flex items-center gap-1 text-[11px] uppercase">
+                        <span>📍 Street Step {sIdx + 1} of {enrichedSteps.length}</span>
+                      </div>
+                      <div className="font-bold text-white text-xs">{st.instruction}</div>
+                      <div className="text-[10px] text-slate-300 font-mono">Distance: {st.distanceMeters || 50}m</div>
+                      {st.stepBonus && (
+                        <div className="text-[10px] text-amber-300">{st.stepBonus}</div>
+                      )}
+                      <button
+                        onClick={() => handleSelectStep(sIdx, 19)}
+                        className="w-full mt-1 py-1 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold"
+                      >
+                        Inspect Street Close-up (19x)
+                      </button>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
 
             {/* Origin Marker (Current Location or Selected Start Point) */}
             {origin && origin.lat != null && origin.lng != null && (
@@ -708,7 +1057,8 @@ export default function SafetyMap({
                     weight: 10,
                     opacity: 0.3,
                     lineCap: 'round',
-                    lineJoin: 'round'
+                    lineJoin: 'round',
+                    interactive: false
                   }}
                 />
               )}
@@ -721,7 +1071,8 @@ export default function SafetyMap({
                   opacity: isSelected ? 0.95 : 0.45,
                   dashArray: !isSelected ? '4, 8' : undefined,
                   lineCap: 'round',
-                  lineJoin: 'round'
+                  lineJoin: 'round',
+                  interactive: false
                 }}
               />
             </React.Fragment>
@@ -745,7 +1096,8 @@ export default function SafetyMap({
                       color: '#FBBF24',
                       fillColor: '#FBBF24',
                       fillOpacity: 0.12,
-                      weight: 0
+                      weight: 0,
+                      interactive: false
                     }}
                   />
                 )}
@@ -781,7 +1133,8 @@ export default function SafetyMap({
                       color: '#38BDF8',
                       fillColor: '#38BDF8',
                       fillOpacity: 0.12,
-                      weight: 0
+                      weight: 0,
+                      interactive: false
                     }}
                   />
                 )}
@@ -873,7 +1226,8 @@ export default function SafetyMap({
                   fillColor: '#F43F5E',
                   fillOpacity: 0.12,
                   weight: 1,
-                  dashArray: '4, 4'
+                  dashArray: '4, 4',
+                  interactive: false
                 }}
               />
               <Marker position={[lat, lng]} icon={icon}>

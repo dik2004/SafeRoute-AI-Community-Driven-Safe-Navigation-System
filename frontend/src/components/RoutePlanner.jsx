@@ -49,6 +49,8 @@ export default function RoutePlanner({
   routes = [],
   selectedRouteIndex = 0,
   setSelectedRouteIndex,
+  selectedStepIndex = 0,
+  onSelectStep,
   onCalculateRoutes,
   isLoadingRoutes,
   timeOfDay = 'night',
@@ -191,66 +193,54 @@ export default function RoutePlanner({
     }
   };
 
-  // Requirement 1 & 2: Use Current Location on-demand with Privacy Protection
-  const handleUseCurrentLocation = (target = 'origin', pendingDest = null) => {
-    if (!navigator.geolocation) {
-      setLocationPermissionError('Geolocation is not supported by your browser.');
-      return;
-    }
-
+  // Use Current Location on-demand with Privacy Protection & IP fallback
+  const handleUseCurrentLocation = async (target = 'origin', pendingDest = null) => {
     setIsLocatingCurrent(true);
     setLocationPermissionError(null);
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
+    try {
+      const pos = await SafeRouteAPI.getCurrentLivePosition({ timeout: 6000 });
+      const lat = pos.lat;
+      const lng = pos.lng;
 
-        let friendlyName = 'Current Location';
-        const initialLoc = { lat, lng, name: friendlyName, isCurrent: true };
+      let friendlyName = pos.city ? `Current Location (${pos.city})` : 'Current Location';
+      const initialLoc = { lat, lng, name: friendlyName, isCurrent: true };
 
-        setIsLocatingCurrent(false);
+      setIsLocatingCurrent(false);
 
-        if (target === 'origin') {
-          setOrigin(initialLoc);
-          setOriginSearch(friendlyName);
-          const activeDest = pendingDest || destination;
-          if (activeDest && activeDest.lat != null) {
-            onCalculateRoutes({ origin: initialLoc, destination: activeDest, timeOfDay, mode });
-          }
-        } else {
-          setDestination(initialLoc);
-          setDestSearch(friendlyName);
-          if (origin && origin.lat != null) {
-            onCalculateRoutes({ origin, destination: initialLoc, timeOfDay, mode });
+      if (target === 'origin') {
+        setOrigin(initialLoc);
+        setOriginSearch(friendlyName);
+        const activeDest = pendingDest || destination;
+        if (activeDest && activeDest.lat != null) {
+          onCalculateRoutes({ origin: initialLoc, destination: activeDest, timeOfDay, mode });
+        }
+      } else {
+        setDestination(initialLoc);
+        setDestSearch(friendlyName);
+        if (origin && origin.lat != null) {
+          onCalculateRoutes({ origin, destination: initialLoc, timeOfDay, mode });
+        }
+      }
+
+      // Resolve friendly neighborhood name in background
+      try {
+        const rev = await SafeRouteAPI.reverseGeocode(lat, lng);
+        if (rev && rev !== 'Current Location') {
+          const updatedLoc = { lat, lng, name: rev, isCurrent: true };
+          if (target === 'origin') {
+            setOrigin(updatedLoc);
+            setOriginSearch(rev);
+          } else {
+            setDestination(updatedLoc);
+            setDestSearch(rev);
           }
         }
-
-        // Resolve friendly neighborhood name in background
-        try {
-          const rev = await SafeRouteAPI.reverseGeocode(lat, lng);
-          if (rev && rev !== 'Current Location') {
-            const updatedLoc = { lat, lng, name: rev, isCurrent: true };
-            if (target === 'origin') {
-              setOrigin(updatedLoc);
-              setOriginSearch(rev);
-            } else {
-              setDestination(updatedLoc);
-              setDestSearch(rev);
-            }
-          }
-        } catch (_) {}
-      },
-      (err) => {
-        setIsLocatingCurrent(false);
-        if (err.code === 1) {
-          setLocationPermissionError('Location access is disabled in your browser. Please allow location permissions.');
-        } else {
-          setLocationPermissionError('Unable to acquire current device location. Please try again.');
-        }
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+      } catch (_) {}
+    } catch (err) {
+      setIsLocatingCurrent(false);
+      setLocationPermissionError('Unable to acquire location. Please allow browser permissions.');
+    }
   };
 
   // Dynamic nearby category quick lookup (Transit, Hospital, Safe Haven)
@@ -910,25 +900,54 @@ export default function RoutePlanner({
                   <Navigation className="w-3.5 h-3.5 text-safe-400" />
                   <span>Turn-by-Turn Safety Steps ({activeRoute.steps.length})</span>
                 </span>
-                {showDirections ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                    Step {selectedStepIndex + 1}/{activeRoute.steps.length}
+                  </span>
+                  {showDirections ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </div>
               </button>
 
               {showDirections && (
-                <div className="pt-2 border-t border-slate-800 space-y-1.5 max-h-56 overflow-y-auto pr-1 animate-in fade-in divide-y divide-slate-800/60">
-                  {activeRoute.steps.map((step, sIdx) => (
-                    <div key={sIdx} className="pt-1.5 first:pt-0 text-[11px] text-slate-300 space-y-0.5">
-                      <div className="flex items-start justify-between gap-1">
-                        <span className="font-medium text-slate-200">{step.instruction}</span>
-                        <span className="text-[10px] text-slate-400 font-mono shrink-0">{step.distanceMeters}m</span>
+                <div className="pt-2 border-t border-slate-800 space-y-1 max-h-64 overflow-y-auto pr-1 animate-in fade-in divide-y divide-slate-800/60">
+                  {activeRoute.steps.map((step, sIdx) => {
+                    const isSelected = sIdx === selectedStepIndex;
+                    return (
+                      <div
+                        key={sIdx}
+                        onClick={() => onSelectStep && onSelectStep(sIdx)}
+                        className={`pt-1.5 pb-1 px-2 rounded-xl transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-emerald-500/15 border border-emerald-500/40 shadow-sm'
+                            : 'hover:bg-slate-800/60 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-black shrink-0 ${
+                              isSelected ? 'bg-emerald-500 text-cyber-950 font-black' : 'bg-slate-800 text-slate-400 border border-slate-700'
+                            }`}>
+                              {sIdx + 1}
+                            </span>
+                            <span className={`font-semibold text-xs truncate ${isSelected ? 'text-white font-bold' : 'text-slate-200'}`}>
+                              {step.instruction}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-mono shrink-0">{step.distanceMeters}m</span>
+                        </div>
+                        {step.stepBonus && (
+                          <div className="text-emerald-400 text-[10px] font-medium mt-0.5 ml-5.5">
+                            {step.stepBonus}
+                          </div>
+                        )}
+                        {step.stepCaution && (
+                          <div className="text-rose-400 text-[10px] font-medium mt-0.5 ml-5.5">
+                            {step.stepCaution}
+                          </div>
+                        )}
                       </div>
-                      {step.stepBonus && (
-                        <div className="text-safe-400 text-[10px] font-medium">{step.stepBonus}</div>
-                      )}
-                      {step.stepCaution && (
-                        <div className="text-rose-400 text-[10px] font-medium">{step.stepCaution}</div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

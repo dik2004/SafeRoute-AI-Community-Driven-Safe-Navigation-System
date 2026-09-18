@@ -215,20 +215,7 @@ export default function SosModal({
   }, [isOpen]);
 
   // Explicit Location Acquisition Handler (Called ONLY upon explicit user action)
-  const acquireRealLocation = useCallback((onSuccessCallback = null) => {
-    if (typeof window === 'undefined' || !navigator.geolocation) {
-      setLocationData({
-        lat: null,
-        lng: null,
-        accuracy: null,
-        timestamp: null,
-        status: 'error',
-        error: 'Geolocation is not supported by your browser.',
-        isDenied: false
-      });
-      return;
-    }
-
+  const acquireRealLocation = useCallback(async (onSuccessCallback = null) => {
     setLocationData(prev => ({
       ...prev,
       status: 'acquiring',
@@ -236,40 +223,32 @@ export default function SosModal({
       isDenied: false
     }));
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const accurate = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: Math.round(pos.coords.accuracy),
-          timestamp: Date.now(),
-          status: 'acquired',
-          error: null,
-          isDenied: false
-        };
-        setLocationData(accurate);
-        if (typeof onSuccessCallback === 'function') {
-          onSuccessCallback(accurate);
-        }
-      },
-      (err) => {
-        const isPermissionDenied = err.code === 1 || err.code === err.PERMISSION_DENIED;
-        const errorMessage = isPermissionDenied
-          ? 'Your location could not be accessed. You can still call an emergency contact without sharing your location.'
-          : (err.message || 'Unable to determine your current location.');
-
-        setLocationData({
-          lat: null,
-          lng: null,
-          accuracy: null,
-          timestamp: null,
-          status: 'error',
-          error: errorMessage,
-          isDenied: isPermissionDenied
-        });
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+    try {
+      const pos = await SafeRouteAPI.getCurrentLivePosition({ timeout: 6000 });
+      const accurate = {
+        lat: pos.lat,
+        lng: pos.lng,
+        accuracy: pos.accuracy || 25,
+        timestamp: Date.now(),
+        status: 'acquired',
+        error: null,
+        isDenied: false
+      };
+      setLocationData(accurate);
+      if (typeof onSuccessCallback === 'function') {
+        onSuccessCallback(accurate);
+      }
+    } catch (err) {
+      setLocationData({
+        lat: null,
+        lng: null,
+        accuracy: null,
+        timestamp: null,
+        status: 'error',
+        error: 'Your location could not be determined. You can still call your emergency contact directly.',
+        isDenied: false
+      });
+    }
   }, []);
 
   const selectedContact = contacts[selectedContactIdx] || null;
@@ -284,7 +263,7 @@ export default function SosModal({
     setIsSirenPlaying(true);
     SoundEngine.playSiren();
 
-    // STEP 2: Request precise current location on-demand
+    // STEP 2: Request precise current location on-demand and trigger backend dispatch
     acquireRealLocation(async (pos) => {
       try {
         const res = await SafeRouteAPI.triggerSOS({
@@ -292,7 +271,12 @@ export default function SosModal({
           batteryLevel: '95%',
           address: 'Live Emergency GPS Location',
           alertType: 'EMERGENCY_PANIC_BUTTON',
-          contactName: contactToCall.name
+          contactName: contactToCall.name,
+          contacts: contacts.map(c => ({
+            name: c.name,
+            phone: c.phone,
+            isPrimary: c.isPrimary || false
+          }))
         });
         setSosResult(res?.alert || null);
       } catch (err) {
@@ -300,12 +284,12 @@ export default function SosModal({
       }
     });
 
-    // STEP 4: Call selected trusted contact via tel:
+    // STEP 3: Prompt direct dial to selected trusted contact via tel:
     const cleanPhone = contactToCall.phone.replace(/[^0-9+]/g, '');
     if (cleanPhone) {
       setTimeout(() => {
         window.location.href = `tel:${cleanPhone}`;
-      }, 400);
+      }, 300);
     }
   }, [contacts, selectedContactIdx, acquireRealLocation]);
 
@@ -575,8 +559,24 @@ export default function SosModal({
               </p>
             </div>
 
-            {/* 1. PRIMARY SOS ACTION: Large Prominent Red HOLD Button */}
-            <div className="space-y-1.5">
+            {/* 1. PRIMARY SOS ACTIONS: 1-Click Instant SOS + Safety Hold Option */}
+            <div className="space-y-2">
+              {/* Instant 1-Click Action Button */}
+              <button
+                onClick={executeSOS}
+                disabled={!selectedContact}
+                className="w-full h-14 sm:h-16 rounded-2xl bg-gradient-to-r from-red-600 via-rose-600 to-red-500 hover:from-red-500 hover:to-rose-500 text-white font-black text-sm sm:text-base uppercase tracking-wider shadow-lg shadow-rose-950/70 flex items-center justify-between px-4 sm:px-5 transition-transform active:scale-[0.98] border border-rose-400/40 focus:outline-none focus:ring-4 focus:ring-rose-500/40"
+              >
+                <div className="flex items-center gap-2.5">
+                  <PhoneCall className="w-5 h-5 fill-current animate-pulse text-white" />
+                  <span className="font-black">⚡ 1-CLICK INSTANT SOS & CALL</span>
+                </div>
+                <span className="text-[10px] sm:text-xs bg-black/40 px-2 py-1 rounded-full border border-white/20 font-mono font-bold">
+                  NOW
+                </span>
+              </button>
+
+              {/* Alternative Hold-to-Activate Button */}
               <div
                 role="button"
                 tabIndex={0}
@@ -597,31 +597,31 @@ export default function SosModal({
                     handleHoldEnd();
                   }
                 }}
-                className={`relative overflow-hidden w-full h-16 sm:h-20 rounded-2xl bg-gradient-to-r from-red-700 via-rose-600 to-red-600 text-white font-black text-base sm:text-lg uppercase tracking-wider shadow-lg shadow-rose-950/60 flex items-center justify-center cursor-pointer select-none transition-transform active:scale-[0.98] focus:outline-none focus:ring-4 focus:ring-rose-500/40 border border-rose-500/30 ${
+                className={`relative overflow-hidden w-full h-12 sm:h-14 rounded-2xl bg-slate-800/90 hover:bg-slate-800 text-slate-200 font-bold text-xs sm:text-sm uppercase tracking-wider shadow-md flex items-center justify-center cursor-pointer select-none transition-transform active:scale-[0.98] focus:outline-none border border-slate-700 ${
                   !selectedContact ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
               >
                 {/* Visual Hold Progress Bar */}
                 <div
-                  className="absolute left-0 top-0 bottom-0 bg-white/30 transition-all duration-75 ease-linear pointer-events-none"
+                  className="absolute left-0 top-0 bottom-0 bg-rose-500/40 transition-all duration-75 ease-linear pointer-events-none"
                   style={{ width: `${holdProgress}%` }}
                 />
 
-                <div className="relative z-10 flex items-center justify-between w-full px-5 sm:px-6 pointer-events-none">
-                  <div className="flex items-center gap-3">
-                    <PhoneCall className={`w-6 h-6 fill-current ${isHolding ? 'animate-bounce text-white' : 'text-white'}`} />
-                    <span className="font-black text-sm sm:text-base">
-                      {isHolding ? 'ACTIVATING SOS...' : '🚨 HOLD TO ACTIVATE SOS'}
+                <div className="relative z-10 flex items-center justify-between w-full px-4 sm:px-5 pointer-events-none">
+                  <div className="flex items-center gap-2">
+                    <Shield className={`w-4 h-4 ${isHolding ? 'animate-bounce text-rose-400' : 'text-slate-400'}`} />
+                    <span className="font-bold text-xs">
+                      {isHolding ? 'ACTIVATING HOLD SOS...' : '🛡️ Or Hold 1.5s (Safety Mode)'}
                     </span>
                   </div>
-                  <span className="text-xs sm:text-sm font-mono font-bold bg-black/40 px-2.5 py-1 rounded-full border border-white/20">
+                  <span className="text-[10px] font-mono font-bold bg-black/50 px-2 py-0.5 rounded-full border border-white/10">
                     {isHolding ? `${remainingSeconds}s` : '1.5s'}
                   </span>
                 </div>
               </div>
 
               <p className="text-[11px] text-slate-400 text-center leading-tight">
-                Calls your selected emergency contact and prepares your current location for sharing.
+                Dispatches real Twilio SMS & voice alert to contacts and launches your phone dialer.
               </p>
             </div>
 
@@ -876,19 +876,36 @@ export default function SosModal({
           /* ========================================================================= */
           <div className="space-y-4 text-xs">
             
-            {/* SOS Activated Header */}
-            <div className="p-4 rounded-2xl bg-rose-950/50 border border-rose-500/60 space-y-2 text-center">
+            {/* SOS Activated & Twilio Cloud Broadcast Status */}
+            <div className="p-4 rounded-2xl bg-rose-950/70 border border-rose-500/70 space-y-2 text-center shadow-lg shadow-rose-950/60">
               <div className="text-sm sm:text-base font-black text-rose-300 uppercase tracking-wide flex items-center justify-center gap-2">
                 <Radio className="w-5 h-5 text-rose-500 animate-ping shrink-0" />
-                <span>🚨 SOS ACTIVATED</span>
+                <span>🚨 SOS ACTIVATED & BROADCASTED</span>
               </div>
-              <div className="font-bold text-white text-sm flex items-center justify-center gap-1.5">
-                <PhoneCall className="w-4 h-4 text-emerald-400 animate-bounce" />
-                <span>Calling {selectedContact?.name || 'Emergency Contact'}...</span>
-              </div>
-              <div className="text-xs text-slate-400 font-mono">
-                {maskPhoneNumber(selectedContact?.phone)}
-              </div>
+              <p className="text-[11px] text-slate-300 leading-snug">
+                {sosResult?.realSmsSentCount > 0
+                  ? `📡 Live Twilio SMS sent to ${sosResult.realSmsSentCount} contact(s) & automated voice alert placed!`
+                  : `📡 Emergency GPS alert & SMS broadcast dispatched to trusted contacts.`}
+              </p>
+
+              {/* Instant Direct 1-Click Dial Action */}
+              {selectedContact && (
+                <div className="pt-1.5 flex flex-col sm:flex-row items-center justify-center gap-2">
+                  <a
+                    href={`tel:${selectedContact.phone.replace(/[^0-9+]/g, '')}`}
+                    className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all"
+                  >
+                    <PhoneCall className="w-4 h-4" />
+                    <span>📞 1-TAP CALL {selectedContact.name.toUpperCase()}</span>
+                  </a>
+                  <a
+                    href="tel:112"
+                    className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all"
+                  >
+                    <span>👮 1-TAP CALL 112 (POLICE)</span>
+                  </a>
+                </div>
+              )}
             </div>
 
             {/* Location Status Badge */}

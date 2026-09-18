@@ -267,6 +267,74 @@ export const SafeRouteAPI = {
     return results.slice(0, 10);
   },
 
+  // Robust Live Position Acquisition (Browser GPS + Fast Network IP Fallback)
+  getCurrentLivePosition: async (options = { timeout: 6000 }) => {
+    // 1. Try Browser Geolocation API first
+    if (typeof window !== 'undefined' && navigator.geolocation) {
+      try {
+        const pos = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            resolve,
+            reject,
+            { enableHighAccuracy: true, timeout: options.timeout || 6000, maximumAge: 0 }
+          );
+        });
+        if (pos?.coords?.latitude != null && pos?.coords?.longitude != null) {
+          return {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: Math.round(pos.coords.accuracy || 10),
+            source: 'gps'
+          };
+        }
+      } catch (err) {
+        console.warn('[Live GPS Notice] Browser GPS unavailable or timed out, trying IP fallback:', err.message);
+      }
+    }
+
+    // 2. High-Speed Free IP Geolocation Fallback
+    try {
+      const res = await fetch('https://ipwho.is/');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.latitude != null && data.longitude != null) {
+          return {
+            lat: data.latitude,
+            lng: data.longitude,
+            accuracy: 800,
+            city: data.city || data.region,
+            source: 'network_ip'
+          };
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const res2 = await fetch('https://freeipapi.com/api/json');
+      if (res2.ok) {
+        const data2 = await res2.json();
+        if (data2.latitude != null && data2.longitude != null) {
+          return {
+            lat: data2.latitude,
+            lng: data2.longitude,
+            accuracy: 800,
+            city: data2.cityName || data2.regionName,
+            source: 'network_ip'
+          };
+        }
+      }
+    } catch (_) {}
+
+    // Fallback default coordinates if all fail (Connaught Place / Center)
+    return {
+      lat: 28.6289,
+      lng: 77.2065,
+      accuracy: 1500,
+      city: 'Delhi',
+      source: 'fallback'
+    };
+  },
+
   reverseGeocode: async (lat, lng) => {
     try {
       const photonUrl = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=en`;

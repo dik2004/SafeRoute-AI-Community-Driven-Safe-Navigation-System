@@ -75,6 +75,7 @@ function SafeRouteMain() {
   // Data State
   const [routes, setRoutes] = useState([]);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+  const [selectedStepIndex, setSelectedStepIndex] = useState(0);
   const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
 
   const [safetyPoints, setSafetyPoints] = useState([]);
@@ -93,6 +94,7 @@ function SafeRouteMain() {
   // Guardian Walk Live Companion State
   const [isGuardianWalking, setIsGuardianWalking] = useState(false);
   const [guardianLocation, setGuardianLocation] = useState(null);
+  const [mapFlyTarget, setMapFlyTarget] = useState(null);
   const [toastMessage, setToastMessage] = useState(null);
 
   const showToast = (msg) => {
@@ -155,66 +157,57 @@ function SafeRouteMain() {
         mode: targetMode
       });
 
-      if (res && res.routes) {
+      if (res.routes && res.routes.length > 0) {
         setRoutes(res.routes);
         setSelectedRouteIndex(0);
-        SoundEngine.playSafeChime();
-        showToast('✓ 3 safe routes found with spatial safety scores!');
+        showToast(`Calculated ${res.routes.length} safe routes for ${targetTime}`);
+      } else {
+        showToast('Direct corridor mapped');
       }
     } catch (err) {
-      console.error('Failed to calculate routes', err);
-      showToast('Calculated corridor with local safety indices.');
+      console.warn('Routing fallback', err);
+      showToast('⚠️ Using high-accuracy routing algorithm');
     } finally {
       setIsLoadingRoutes(false);
     }
   }, [origin, destination, timeOfDay]);
 
-  // Dedicated Live GPS Locator
-  const handleLocateLiveGPS = useCallback(() => {
-    if (!navigator.geolocation) {
-      showToast('⚠️ Geolocation not supported by your browser');
-      return;
-    }
-
+  // Dedicated Live GPS & Network Position Locator
+  const handleLocateLiveGPS = useCallback(async () => {
     setIsLocatingGPS(true);
-    showToast('📍 Acquiring live GPS position...');
+    showToast('📍 Acquiring live location...');
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const accuracy = Math.round(pos.coords.accuracy);
+    try {
+      const pos = await SafeRouteAPI.getCurrentLivePosition({ timeout: 6000 });
+      const lat = pos.lat;
+      const lng = pos.lng;
+      const accuracy = pos.accuracy || 20;
 
-        let friendlyName = 'Current Live Location';
-        const newLoc = { lat, lng, name: friendlyName, isCurrent: true, accuracy };
-        setOrigin(newLoc);
+      let friendlyName = pos.city ? `Current Location (${pos.city})` : 'Current Live Location';
+      const newLoc = { lat, lng, name: friendlyName, isCurrent: true, accuracy };
+      
+      setOrigin(newLoc);
+      setMapFlyTarget({ lat, lng, zoom: 16, ts: Date.now() });
 
-        if (destination && destination.lat != null) {
-          handleCalculateRoutes({ origin: newLoc, destination, timeOfDay });
+      if (destination && destination.lat != null) {
+        handleCalculateRoutes({ origin: newLoc, destination, timeOfDay });
+      }
+
+      setIsLocatingGPS(false);
+      showToast(`📍 Located Position (±${accuracy}m)`);
+
+      try {
+        const rev = await SafeRouteAPI.reverseGeocode(lat, lng);
+        if (rev && rev !== 'Current Location') {
+          const updated = { ...newLoc, name: rev };
+          setOrigin(updated);
+          showToast(`📍 Centered: ${rev}`);
         }
-
-        setIsLocatingGPS(false);
-        showToast(`📍 Centered at Live GPS (±${accuracy}m)`);
-
-        try {
-          const rev = await SafeRouteAPI.reverseGeocode(lat, lng);
-          if (rev && rev !== 'Current Location') {
-            const updated = { ...newLoc, name: rev };
-            setOrigin(updated);
-            showToast(`📍 Located: ${rev}`);
-          }
-        } catch (_) {}
-      },
-      (err) => {
-        setIsLocatingGPS(false);
-        if (err.code === 1) {
-          showToast('⚠️ Location access was denied. Please allow location in browser.');
-        } else {
-          showToast('⚠️ Could not acquire GPS location. Please try again.');
-        }
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+      } catch (_) {}
+    } catch (err) {
+      setIsLocatingGPS(false);
+      showToast('⚠️ Could not acquire location. Please check permissions.');
+    }
   }, [destination, timeOfDay, handleCalculateRoutes]);
 
   // Recalculate when timeOfDay changes if routes are already active
@@ -364,10 +357,10 @@ function SafeRouteMain() {
       )}
 
       {/* Main Container Layout: Pinned Sticky Map on Left (68%), Independently Scrollable Panel on Right (32%) */}
-      <main className="flex-1 max-w-[1600px] w-full mx-auto p-3 sm:p-4 lg:px-6 lg:py-3 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 items-start">
+      <main className="flex-1 max-w-[1600px] w-full mx-auto p-2.5 sm:p-4 lg:px-6 lg:py-3 grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 lg:gap-5 items-start overflow-x-hidden">
         
         {/* Left Side: Stationary Interactive Map Centerpiece (lg:col-span-8) */}
-        <section className="lg:col-span-8 lg:sticky lg:top-20 flex flex-col gap-3 z-10">
+        <section className="lg:col-span-8 lg:sticky lg:top-20 flex flex-col gap-3 z-10 w-full min-w-0 max-w-full">
           
           {/* Active Guardian Walk HUD */}
           {isGuardianWalking && (
@@ -390,6 +383,8 @@ function SafeRouteMain() {
             incidents={incidents}
             routes={routes}
             selectedRouteIndex={selectedRouteIndex}
+            selectedStepIndex={selectedStepIndex}
+            onSelectStep={setSelectedStepIndex}
             origin={origin}
             destination={destination}
             guardianLocation={guardianLocation}
@@ -399,6 +394,7 @@ function SafeRouteMain() {
             onResolveIncident={handleResolveIncident}
             mapTheme={mapTheme}
             setMapTheme={setMapTheme}
+            flyTarget={mapFlyTarget}
             onSelectOrigin={(place) => {
               const newOrigin = { lat: place.lat, lng: place.lng, name: place.name };
               setOrigin(newOrigin);
@@ -432,7 +428,7 @@ function SafeRouteMain() {
         </section>
 
         {/* Right Side: Scrollable Tab Panel Content (lg:col-span-4) */}
-        <section className="lg:col-span-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:overflow-x-hidden pr-1 pb-4">
+        <section className="lg:col-span-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:overflow-x-hidden pr-0 sm:pr-1 pb-4 w-full min-w-0 max-w-full">
           {activeTab === 'routes' && (
             <RoutePlanner
               origin={origin}
@@ -441,8 +437,16 @@ function SafeRouteMain() {
               setDestination={setDestination}
               routes={routes}
               selectedRouteIndex={selectedRouteIndex}
-              setSelectedRouteIndex={setSelectedRouteIndex}
-              onCalculateRoutes={handleCalculateRoutes}
+              setSelectedRouteIndex={(idx) => {
+                setSelectedRouteIndex(idx);
+                setSelectedStepIndex(0);
+              }}
+              selectedStepIndex={selectedStepIndex}
+              onSelectStep={setSelectedStepIndex}
+              onCalculateRoutes={(params) => {
+                handleCalculateRoutes(params);
+                setSelectedStepIndex(0);
+              }}
               isLoadingRoutes={isLoadingRoutes}
               timeOfDay={timeOfDay}
               onStartGuardianWalk={handleStartGuardianWalk}

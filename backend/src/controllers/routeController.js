@@ -177,31 +177,35 @@ exports.calculateRoutes = async (req, res) => {
             if (sIdx === 1) stepCaution = '⚠️ Warning: Low lighting reported in this alleyway';
           }
 
-          const instruction = formatManeuverInstruction(
-            step,
-            sIdx,
-            rawSteps.length,
-            origin.name,
-            destination.name
-          );
-
-          const icon = getManeuverIcon(step, sIdx, rawSteps.length);
+          const stepCoords = (step.maneuver && step.maneuver.location)
+            ? { lng: Number(step.maneuver.location[0]), lat: Number(step.maneuver.location[1]) }
+            : (coordinates && coordinates.length > 0)
+            ? {
+                lng: Number(coordinates[Math.min(coordinates.length - 1, Math.floor((sIdx / Math.max(1, rawSteps.length - 1)) * (coordinates.length - 1)))][0]),
+                lat: Number(coordinates[Math.min(coordinates.length - 1, Math.floor((sIdx / Math.max(1, rawSteps.length - 1)) * (coordinates.length - 1)))][1])
+              }
+            : null;
 
           return {
             instruction,
             icon,
             distanceMeters: Math.max(10, Math.round(step.distance || 50)),
+            lat: stepCoords ? stepCoords.lat : null,
+            lng: stepCoords ? stepCoords.lng : null,
             stepCaution,
             stepBonus
           };
         });
       } else {
         // Fallback rich synthetic waypoints if no sub-steps returned
+        const coordLen = coordinates ? coordinates.length : 0;
         enrichedSteps = [
           {
             instruction: `Start at ${origin.name || 'Origin Point'}`,
             icon: 'start',
             distanceMeters: Math.round(route.distance * 0.25),
+            lat: origin.lat,
+            lng: origin.lng,
             stepBonus: presetType === 'safest' ? '💡 Illuminated starting avenue' : null,
             stepCaution: null
           },
@@ -211,6 +215,8 @@ exports.calculateRoutes = async (req, res) => {
               : 'Proceed straight along connecting thoroughfare',
             icon: 'straight',
             distanceMeters: Math.round(route.distance * 0.5),
+            lat: coordLen > 1 ? coordinates[Math.floor(coordLen / 2)][1] : (origin.lat + destination.lat) / 2,
+            lng: coordLen > 1 ? coordinates[Math.floor(coordLen / 2)][0] : (origin.lng + destination.lng) / 2,
             stepBonus: presetType === 'safest' ? '📹 24/7 Monitored CCTV corridor' : null,
             stepCaution: presetType === 'fastest' ? '⚠️ Caution: Unmonitored inner section' : null
           },
@@ -218,6 +224,8 @@ exports.calculateRoutes = async (req, res) => {
             instruction: `Arrive safely at ${destination.name || 'Destination'}`,
             icon: 'destination',
             distanceMeters: Math.round(route.distance * 0.25),
+            lat: destination.lat,
+            lng: destination.lng,
             stepBonus: '🏥 Emergency Haven / Transit Point within reach',
             stepCaution: null
           }

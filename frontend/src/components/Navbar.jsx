@@ -221,14 +221,14 @@ export default function Navbar({
           </nav>
 
           {/* Right Action Controls Cluster */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             
             {/* 1. Live GPS Location Button */}
             {onLocateLiveGPS && (
               <button
                 onClick={onLocateLiveGPS}
                 disabled={isLocatingGPS}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 hover:text-emerald-300 border border-slate-800 hover:border-emerald-500/40 text-xs font-bold transition-all shadow-sm active:scale-95 focus:outline-none"
+                className="flex items-center gap-1 px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 hover:text-emerald-300 border border-slate-800 hover:border-emerald-500/40 text-xs font-bold transition-all shadow-sm active:scale-95 focus:outline-none"
                 title="Locate my live position on GPS"
               >
                 {isLocatingGPS ? (
@@ -236,7 +236,7 @@ export default function Navbar({
                 ) : (
                   <Crosshair className="w-3.5 h-3.5 text-emerald-400" />
                 )}
-                <span className="hidden sm:inline">{isLocatingGPS ? 'Locating...' : 'Live GPS'}</span>
+                <span className="hidden md:inline">{isLocatingGPS ? 'Locating...' : 'Live GPS'}</span>
               </button>
             )}
 
@@ -247,7 +247,7 @@ export default function Navbar({
                   setIsTimeDropdownOpen(prev => !prev);
                   setIsThemeDropdownOpen(false);
                 }}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-slate-700/80 hover:border-slate-600 text-xs font-semibold transition-all shadow-sm focus:outline-none focus:ring-1 focus:ring-safe-500/40"
+                className="flex items-center gap-1 px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-slate-700/80 hover:border-slate-600 text-xs font-semibold transition-all shadow-sm focus:outline-none focus:ring-1 focus:ring-safe-500/40"
                 title="Select Time of Day for safety lighting factor"
               >
                 <ActiveTimeIcon className={`w-3.5 h-3.5 ${activeTimeObj.color}`} />
@@ -297,13 +297,13 @@ export default function Navbar({
 
             {/* 3. Map Theme Dropdown (Dark, Slate Grey, Clean Light) */}
             {setMapTheme && (
-              <div className="relative" ref={themeDropdownRef}>
+              <div className="relative hidden sm:block" ref={themeDropdownRef}>
                 <button
                   onClick={() => {
                     setIsThemeDropdownOpen(prev => !prev);
                     setIsTimeDropdownOpen(false);
                   }}
-                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-slate-700/80 hover:border-slate-600 text-xs font-semibold transition-all shadow-sm focus:outline-none focus:ring-1 focus:ring-safe-500/40"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-slate-700/80 hover:border-slate-600 text-xs font-semibold transition-all shadow-sm focus:outline-none focus:ring-1 focus:ring-safe-500/40"
                   title="Switch Map Theme (Dark, Grey, Light)"
                 >
                   <Palette className="w-3.5 h-3.5 text-safe-400" />
@@ -355,7 +355,7 @@ export default function Navbar({
             {/* Report Hazard Button */}
             <button
               onClick={onOpenReportIncident}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 hover:border-slate-700 text-xs font-semibold transition-all"
+              className="hidden md:flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 hover:border-slate-700 text-xs font-semibold transition-all"
               title="Report safety hazard on map"
             >
               <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
@@ -365,7 +365,7 @@ export default function Navbar({
             {/* User Points Badge */}
             <button
               onClick={onOpenProfile}
-              className="flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 text-xs text-slate-200 transition-all hover:bg-slate-800/80"
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 sm:py-2 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 text-xs text-slate-200 transition-all hover:bg-slate-800/80"
               title="Guardian Profile & Safe Points"
             >
               <span className="text-sm">{userProfile?.avatar || '🛡️'}</span>
@@ -377,7 +377,7 @@ export default function Navbar({
             {/* Prominent SOS Emergency Button */}
             <button
               onClick={onOpenSOS}
-              className="flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl bg-gradient-to-r from-red-600 via-rose-600 to-red-500 hover:from-red-500 hover:to-rose-500 text-white text-xs font-black shadow-neon-hazard active:scale-95 transition-all animate-pulse"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-red-600 via-rose-600 to-red-500 hover:from-red-500 hover:to-rose-500 text-white text-xs font-black shadow-neon-hazard active:scale-95 transition-all animate-pulse"
               title="Emergency SOS Panic Hub"
             >
               <PhoneCall className="w-3.5 h-3.5 fill-current" />
